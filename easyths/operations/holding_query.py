@@ -57,19 +57,12 @@ class HoldingQueryOperation(BaseOperation[EmptyParams]):
             class_name="AfxMDIFrame140s",
             control_type="Pane",
             auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
-
-        HexinScrollWnd = self.get_control_with_children(
-            main_panel, title="HexinScrollWnd", auto_id="1047"
-        )
-        HexinScrollWnd2 = self.get_control_with_children(
-            HexinScrollWnd, auto_id="200", class_name="AfxWnd140s"
         )
 
-        # 获取表格控件并复制
-        table_panel = self.get_control_with_children(
-            HexinScrollWnd2, title="Custom1", class_name="CVirtualGridCtrl"
-        )
+        # 获取表格控件并复制（层级差异统一由 get_table_control 适配）
+        table_panel = self.get_table_control(main_panel)
+        if table_panel is None:
+            return self._fail("持仓查询失败：未找到持仓表格控件")
         table_panel.click_input()
         table_panel.type_keys("^a")
         time.sleep(0.05)

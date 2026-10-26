@@ -38,7 +38,7 @@ class ConditionOrderCancelOperation(BaseOperation[ConditionOrderCancelParams]):
         self.sleep(0.4)
         panel_AfxWnd140s_2 = self.get_control_with_children(
             main_window, control_type="Pane", auto_id="59648"
-        ).children(class_name="AfxMDIFrame140s")[0]
+        )
         panel_AfxWnd140s = self.get_control_with_children(
             panel_AfxWnd140s_2,
             auto_id="2393",

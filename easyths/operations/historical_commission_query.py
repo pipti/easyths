@@ -48,7 +48,7 @@ class HistoricalCommissionQueryOperation(BaseOperation[HistoricalQueryParams]):
             class_name="AfxMDIFrame140s",
             control_type="Pane",
             auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
+        )
 
         # 时间范围单选按钮 auto_id 映射
         control_map = {

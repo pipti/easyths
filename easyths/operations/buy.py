@@ -33,32 +33,40 @@ class BuyOperation(BaseOperation[LimitOrderParams]):
         main_window.type_keys("{F1}")
         # 防抖
         self.sleep(0.25)
-        main_panel = self.get_control_with_children(
-            main_window,
-            class_name="AfxMDIFrame140s",
-            control_type="Pane",
-            auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
+        main_panel = self.get_form_panel(main_window)
 
-        # 1. 输入股票代码
-        self.get_control_with_children(
-            main_panel, control_type="Edit", auto_id="1032"
-        ).type_keys(stock_code)
+        # 1. 输入股票代码（先清空再写入，避免残留代码被追加）
+        self.fill_edit(
+            self.get_control_with_children(
+                main_panel, control_type="Edit", auto_id="1032"
+            ),
+            stock_code,
+        )
+        # 输入代码后客户端会自动预填「买入价格」，等它填完再覆盖
+        self.sleep(0.3)
+        # 2. 输入价格（必须先清空预填的默认价格，否则会被追加成 46.3046.51）
+        self.fill_edit(
+            self.get_control_with_children(
+                main_panel, control_type="Edit", auto_id="1033"
+            ),
+            price,
+        )
         self.sleep(0.08)
-        # 2. 输入价格
-        self.get_control_with_children(
-            main_panel, control_type="Edit", auto_id="1033"
-        ).type_keys(price)
-        self.sleep(0.08)
-        # 3. 输入数量
-        self.get_control_with_children(
-            main_panel, control_type="Edit", auto_id="1034"
-        ).type_keys(str(params.quantity))
+        # 3. 输入数量（先清空「可买」预填值）
+        self.fill_edit(
+            self.get_control_with_children(
+                main_panel, control_type="Edit", auto_id="1034"
+            ),
+            str(params.quantity),
+        )
         # 等待输入数量后稳定在确认
         self.sleep(0.3)
         # 4. 提交委托
         main_window.type_keys("{ENTER}")
         self.wait_for_pop_dialog(0.3)
+        # 客户端若未关闭「委托确认」对话框，这里自动点“是”完成提交
+        if self.confirm_pop_dialog():
+            self.wait_for_pop_dialog(0.3)
         # 没弹窗就是成功，这里已经假设用户已经按照项目设置好软件，
         # 为了加快操作速度，去掉了多余的弹窗处理（因为设置好软件后不会有弹窗）
         is_op_success = not self.is_exist_pop_dialog()

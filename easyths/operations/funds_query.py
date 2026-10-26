@@ -24,13 +24,16 @@ class FundsQueryOperation(BaseOperation[EmptyParams]):
         main_window_wrapper.type_keys("{F5}")
         # 防抖
         self.sleep(0.3)
-        main_panel = self.get_control_with_children(
+        outer = self.get_control_with_children(
             main_window_wrapper,
             class_name="AfxMDIFrame140s",
             control_type="Pane",
             auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
-        text_controls = main_panel.children(control_type="Text", class_name="Static")
+        )
+        # 兼容同花顺 9.60.x：资金 Text 直接挂在 59648 面板下；
+        # 老版本还有一层 AfxMDIFrame140s 子框架
+        sub_frame = outer.children(class_name="AfxMDIFrame140s")
+        main_panel = sub_frame[0] if sub_frame else outer
 
         # 资金字段控件 auto_id → Result 字段名映射
         field_map = {
@@ -44,11 +47,27 @@ class FundsQueryOperation(BaseOperation[EmptyParams]):
             "1026": "daily_profit",
             "1029": "daily_profit_ratio",
         }
-        raw_funds = {}
-        for control in text_controls:
-            auto_id = control.element_info.automation_id
-            if auto_id in field_map:
-                raw_funds[field_map[auto_id]] = control.window_text()
+        raw_funds: dict[str, str] = {}
+        # 页面刚切换时表格文本可能尚未渲染完（实测偶发一次全空 → 校验报
+        # "Field required"），读不全就短暂重试，最多 3 次。
+        for attempt in range(3):
+            text_controls = main_panel.children(
+                control_type="Text", class_name="Static"
+            )
+            raw_funds = {}
+            for control in text_controls:
+                auto_id = control.element_info.automation_id
+                if auto_id in field_map:
+                    raw_funds[field_map[auto_id]] = control.window_text()
+            if len(raw_funds) == len(field_map):
+                break
+            self.logger.warning(
+                "资金字段未取全，重试中",
+                attempt=attempt + 1,
+                got=len(raw_funds),
+                expect=len(field_map),
+            )
+            self.sleep(0.4)
 
         return self._ok(
             data=FundsResult.model_validate(raw_funds).model_dump(),

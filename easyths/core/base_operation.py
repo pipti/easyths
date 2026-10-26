@@ -16,6 +16,8 @@ from uuid import uuid4
 import pyperclip
 import pywinauto
 import structlog
+import win32con
+import win32gui
 from PIL import Image
 from pydantic import ValidationError
 
@@ -329,12 +331,85 @@ class BaseOperation[Ps: OperationParams](ABC):
 
         return "内嵌的浏览器窗口", None
 
-    def set_main_window_focus(self) -> None:
-        """设置主窗口焦点"""
+    def get_table_control(self, main_panel: Any) -> Any | None:
+        """取当前页面的数据表格控件。
+
+        同一客户端不同页面的表格层级不一致，统一在此适配：
+          - 资金股票/持仓页：HexinScrollWnd(1047) > AfxWnd140s(200) > CVirtualGridCtrl
+          - 撤单/委托页：1047 自身就是 CVirtualGridCtrl
+        """
+        scroll = self.get_control_with_children(
+            main_panel, title="HexinScrollWnd", auto_id="1047"
+        )
+        if scroll is not None:
+            inner = self.get_control_with_children(
+                scroll, auto_id="200", class_name="AfxWnd140s"
+            )
+            if inner is not None:
+                grid = self.get_control_with_children(
+                    inner, title="Custom1", class_name="CVirtualGridCtrl"
+                )
+                if grid is not None:
+                    return grid
+        # 1047 自身即表格（撤单页）
+        grid = self.get_control_with_children(
+            main_panel, auto_id="1047", class_name="CVirtualGridCtrl"
+        )
+        if grid is not None:
+            return grid
+        # 最后按 class 兜底
+        return self.get_control_with_children(
+            main_panel, class_name="CVirtualGridCtrl"
+        )
+
+    def confirm_pop_dialog(self) -> bool:
+        """自动确认「是否确定…」类二次确认弹窗（点"是(Y)"），返回是否处理了弹窗。
+
+        覆盖委托确认（提交委托）、撤单确认（撤销委托）等弹窗。不处理这类弹窗的话，
+        委托/撤单并不会真正发出，而代码会把"有弹窗"误判为失败。
+
+        注意：本逻辑等价于在客户端关闭这些二次确认——实盘即无人工兜底，风险自负。
+        """
+        if not self.is_exist_pop_dialog():
+            return False
+        content = self.get_pop_dialog_content() or ""
+        if "是否确定" not in content and "委托确认" not in content:
+            return False
         main_window = self.get_main_window(wrapper_obj=True)
-        if not main_window.is_visible():
-            main_window.restore()
-        main_window.set_focus()
+        for pop_pane in main_window.children(control_type="Pane", class_name="#32770"):
+            try:
+                for button in pop_pane.descendants(control_type="Button"):
+                    # 按钮为“是(Y)/否(N)”，按文字匹配（不同版本 auto_id 不稳定）
+                    if (button.window_text() or "").strip().startswith("是"):
+                        button.click_input()
+                        self.sleep(0.4)
+                        return True
+            except Exception:
+                continue
+        return False
+
+    def set_main_window_focus(self) -> None:
+        """设置主窗口焦点
+
+        该客户端主窗口是 DirectUI 实现，UIA 的 restore()/set_focus() 在最小化时会抛
+        COM 错误 0x80040201，不可见时又会静默失败，导致后续 type_keys 的按键落到别的
+        窗口上（表现为找不到输入框、'NoneType' object has no attribute 'type_keys'）。
+        因此优先走 Win32 显示+置前台，UIA 仅作兜底。
+        """
+        main_window = self.get_main_window(wrapper_obj=True)
+        handle = getattr(main_window, "handle", None)
+        if handle:
+            try:
+                win32gui.ShowWindow(handle, win32con.SW_RESTORE)
+                win32gui.ShowWindow(handle, win32con.SW_SHOW)
+                win32gui.SetForegroundWindow(handle)
+                win32gui.BringWindowToTop(handle)
+            except Exception:
+                self.logger.warning("Win32 置前台失败，回退 UIA 聚焦")
+        try:
+            main_window.set_focus()
+        except Exception:
+            pass
 
     def get_top_window(self) -> "pywinauto.application.WindowSpecification | None":
         """获取最顶层的窗口"""
@@ -511,7 +586,90 @@ class BaseOperation[Ps: OperationParams](ABC):
                 continue
             # 匹配成功，立刻返回第一个
             return child
+
+        # 3. 直接子级未命中时，再向下找一层。
+        # 该客户端不同页面把内容面板的嵌套层级做得不一致：
+        #   - 资金股票页：字段直接挂在 59648 下
+        #   - 买入/卖出/委托页：59648 下还多包一层 AfxMDIFrame140s，内容在内层
+        # 这里统一兜底一层，避免每个操作各自写死层级（写死就会在换页面/换版本时踩空）。
+        for child in all_children:
+            try:
+                grand_children = child.children(
+                    control_type=control_type, class_name=class_name, title=title
+                )
+            except Exception:
+                continue
+            for grand_child in grand_children:
+                info = grand_child.element_info
+                if auto_id and info.automation_id != auto_id:
+                    continue
+                if title_contains and title_contains not in info.name:
+                    continue
+                return grand_child
+
+        # 4. 指定了 auto_id 仍未命中时，做一次全深度兜底。
+        # 部分页面（如撤单页）把过滤框埋得更深，层级无法预知；
+        # auto_id 在各版本间基本稳定，按它深搜最可靠。
+        # 仅在有 auto_id 时启用，避免 control_type 单条件查询误命中（如弹窗判定）。
+        if auto_id:
+            try:
+                for deep_child in parent_control.descendants(
+                    control_type=control_type, class_name=class_name, title=title
+                ):
+                    info = deep_child.element_info
+                    if info.automation_id != auto_id:
+                        continue
+                    if title_contains and title_contains not in info.name:
+                        continue
+                    return deep_child
+            except Exception:
+                pass
         return None
+
+    def fill_edit(self, control: Any, value: str) -> None:
+        """清空输入框原有内容后再写入新值。
+
+        同花顺下单表单在输入证券代码后会自动预填「买入价格」「买入数量」等字段，
+        直接 type_keys 会变成"追加"，出现 46.30 + 46.31 = 46.304631 这种脏值，
+        客户端随即报「委托价格的小数部分应为 2 位」。
+
+        注意：该客户端的数字输入框**不支持 ^a 全选**（实测选择不生效，仍是追加），
+        必须用 HOME 定位到开头再 DELETE 逐个删干净，最后才输入新值。
+        """
+        control.type_keys("{HOME}", pause=0.02)
+        self.sleep(0.03)
+        control.type_keys("{DELETE 16}", pause=0.01)
+        self.sleep(0.05)
+        control.type_keys(str(value), pause=0.02)
+        self.sleep(0.05)
+
+    def get_form_panel(self, main_window: Any) -> Any | None:
+        """获取委托表单所在的面板，自动兼容"多一层嵌套"的客户端版本。
+
+        实测同一客户端不同页面的层级并不一致：
+          - 资金股票/持仓页：字段直接挂在 auto_id=59648 的 AfxMDIFrame140s 下
+          - 买入/卖出页：59648 之下还多包一层同 class 的 Pane(59649)，字段挂在内层
+        这里统一处理：能下钻且下钻后确实找得到表单字段，就用内层；否则用外层。
+        """
+        panel = self.get_control_with_children(
+            main_window,
+            class_name="AfxMDIFrame140s",
+            control_type="Pane",
+            auto_id="59648",
+        )
+        if panel is None:
+            return None
+        inner = self.get_control_with_children(
+            panel, class_name="AfxMDIFrame140s", control_type="Pane"
+        )
+        if inner is not None and (
+            self.get_control_with_children(
+                inner, control_type="Edit", auto_id="1032"
+            )
+            is not None
+        ):
+            return inner
+        return panel
 
     def ocr_captcha(self, control: Any) -> tuple[str, Image.Image]:
         """根据控件获取OCR验证码结果"""

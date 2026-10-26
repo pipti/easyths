@@ -31,12 +31,7 @@ class MarketBuyOperation(BaseOperation[MarketOrderParams]):
         self.switch_left_menus("市价委托", "买入")
         # 防抖
         self.sleep(0.25)
-        main_panel = self.get_control_with_children(
-            main_window,
-            class_name="AfxMDIFrame140s",
-            control_type="Pane",
-            auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
+        main_panel = self.get_form_panel(main_window)
 
         # 清除可能残留的股票代码再输入
         self.get_control_with_children(
@@ -84,6 +79,8 @@ class MarketBuyOperation(BaseOperation[MarketOrderParams]):
             main_panel, control_type="Button", auto_id="1006"
         ).click()
         self.sleep(0.35)
+        # 客户端若未关闭「委托确认」对话框，这里自动点“是”完成提交
+        self.confirm_pop_dialog()
         # 出现弹窗说明没提交成功
         pop_dialog_content = self.get_pop_dialog_content()
         if pop_dialog_content:

@@ -51,7 +51,7 @@ class OrderQueryOperation(BaseOperation[StockQueryParams]):
             class_name="AfxMDIFrame140s",
             control_type="Pane",
             auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
+        )
 
         # 清空查询框（显示全部委托），指定股票代码则输入过滤
         edit_stock_code = self.get_control_with_children(
@@ -68,15 +68,11 @@ class OrderQueryOperation(BaseOperation[StockQueryParams]):
         query_btn.click()
         time.sleep(0.1)
 
-        # 复制表格数据
+        # 复制表格数据（各页面表格层级不一致，统一由 get_table_control 适配）
         self.clear_clipboard()
-        table_control = (
-            self.get_control_with_children(
-                main_panel, auto_id="1047", control_type="Pane"
-            )
-            .children()[0]
-            .children(class_name="CVirtualGridCtrl")[0]
-        )
+        table_control = self.get_table_control(main_panel)
+        if table_control is None:
+            return self._fail("委托查询失败：未找到委托表格控件")
         table_control.click_input()
         table_control.type_keys("^a")
         time.sleep(0.05)

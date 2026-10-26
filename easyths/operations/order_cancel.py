@@ -52,7 +52,7 @@ class OrderCancelOperation(BaseOperation[OrderCancelParams]):
             class_name="AfxMDIFrame140s",
             control_type="Pane",
             auto_id="59648",
-        ).children(class_name="AfxMDIFrame140s")[0]
+        )
 
         # 清空查询框（显示全部委托），指定股票代码则输入过滤；
         # 点击查询按钮相当于刷新数据
@@ -69,15 +69,11 @@ class OrderCancelOperation(BaseOperation[OrderCancelParams]):
         ).click()
         time.sleep(0.1)
 
-        # 复制刷新后的委托表格，统计待撤委托笔数
+        # 复制刷新后的委托表格，统计待撤委托笔数（表格层级差异由 get_table_control 适配）
         self.clear_clipboard()
-        table_control = (
-            self.get_control_with_children(
-                main_panel, auto_id="1047", control_type="Pane"
-            )
-            .children()[0]
-            .children(class_name="CVirtualGridCtrl")[0]
-        )
+        table_control = self.get_table_control(main_panel)
+        if table_control is None:
+            return self._fail("撤单失败：未找到委托表格控件")
         table_control.click_input()
         table_control.type_keys("^a")
         time.sleep(0.05)
@@ -97,9 +93,11 @@ class OrderCancelOperation(BaseOperation[OrderCancelParams]):
         # 必须有单才可以撤，没单的话按钮是灰色的，click会报错
         if cancel_btn.is_enabled():
             cancel_btn.click()
-        # 等待弹窗出现，软件必须确保已经勾选 撤单不需要确认
+        # 客户端未关闭「撤单确认」时会先弹确认框，这里自动点“是”完成撤单
+        if self.wait_for_pop_dialog(0.4):
+            self.confirm_pop_dialog()
         # 没有弹窗就是成功了
-        is_op_success = not self.wait_for_pop_dialog(0.4)
+        is_op_success = not self.is_exist_pop_dialog()
 
         if not is_op_success:
             return self._fail(f"撤单存在确认弹窗: {self.get_pop_dialog_content()}")
